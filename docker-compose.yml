@@ -1,0 +1,72 @@
+# Run the whole app:   docker compose up --build -d
+# Local:   web http://127.0.0.1:3000    API http://127.0.0.1:8000/docs
+# Public:  set CLOUDFLARE_TUNNEL_TOKEN in .env, then  docker compose --profile public up --build -d
+#          The tunnel serves the app on your domain (e.g. https://lumvy.io) with no open router ports.
+# Local ports are published on 127.0.0.1 only; public traffic goes only through the tunnel.
+services:
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    ports:
+      - "127.0.0.1:${ATLAS_WEB_PORT:-3000}:80"
+    extra_hosts:
+      # https://lumvy.io:8443 is proxied to Ollama on the host (docker/nginx-web.conf).
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    ports:
+      - "127.0.0.1:${ATLAS_API_PORT:-8000}:8000"
+    environment:
+      ATLAS_CORS_ORIGINS: '["http://localhost:${ATLAS_WEB_PORT:-3000}","http://127.0.0.1:${ATLAS_WEB_PORT:-3000}","https://${PUBLIC_DOMAIN:-lumvy.io}","https://www.${PUBLIC_DOMAIN:-lumvy.io}"]'
+      ATLAS_ALLOWED_HOSTS: '["127.0.0.1","localhost","api","api.${PUBLIC_DOMAIN:-lumvy.io}"]'
+      ATLAS_MAX_UPLOAD_MB: ${ATLAS_MAX_UPLOAD_MB:-500}
+      # CQA: values come from the git-ignored root .env (compose reads it for ${...}); nothing is stored here.
+      # `docker compose config` prints them, so never share its output.
+      ATLAS_CQA_SOURCE_URL: ${ATLAS_CQA_SOURCE_URL:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ATLAS_CQA_OPENAI_MODEL: ${ATLAS_CQA_OPENAI_MODEL:-gpt-4.1}
+      ATLAS_CQA_TEAM_NAME: ${ATLAS_CQA_TEAM_NAME:-}
+      # Evaluation mode 1 (hybrid): Qwen on the host's Ollama, reached through the ollama-forward sidecar below.
+      ATLAS_CQA_DEFAULT_MODE_TYPE: ${ATLAS_CQA_DEFAULT_MODE_TYPE:-1}
+      ATLAS_CQA_GEMMA_BASE_URL: ${ATLAS_CQA_GEMMA_BASE_URL:-http://localhost:11434/v1}
+      ATLAS_CQA_GEMMA_MODEL: ${ATLAS_CQA_GEMMA_MODEL:-qwen3:27b}
+      # Qwen (the team's evaluator) answers the unchanged official criteria in mode 1. Ollama with the model runs on
+      # the host or behind an SSH tunnel on the host's port 11434 (see .env.example).
+      ATLAS_CQA_LOCAL_EVALUATOR: ${ATLAS_CQA_LOCAL_EVALUATOR:-qwen}
+      ATLAS_CQA_QWEN_BASE_URL: ${ATLAS_CQA_QWEN_BASE_URL:-http://localhost:11434}
+      ATLAS_CQA_QWEN_MODEL: ${ATLAS_CQA_QWEN_MODEL:-qwen3.8:27b}
+      # Ollama runs on the host PC (not in Docker). Both URLs reach it from inside this container.
+      OLLAMA_BASE_URL: http://localhost:11434
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./data/workspaces:/data/workspaces
+    restart: unless-stopped
+
+  # Port forward: localhost:11434 inside the api container -> Ollama on the host (host.docker.internal:11434).
+  # Shares the api container's network, so the api code can call http://localhost:11434 as on the host.
+  ollama-forward:
+    image: alpine/socat:1.8.0.3
+    command: TCP-LISTEN:11434,fork,reuseaddr TCP:host.docker.internal:11434
+    network_mode: "service:api"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  # Cloudflare Tunnel. Route lumvy.io -> http://web:80 is set in the Cloudflare dashboard on the tunnel's
+  # "Public Hostname" tab. The web container proxies https://lumvy.io/api/v1 to the api, so no api subdomain is needed.
+  tunnel:
+    image: cloudflare/cloudflared:2025.10.0
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    depends_on:
+      - web
+      - api
+    restart: unless-stopped
+    profiles: ["public"]

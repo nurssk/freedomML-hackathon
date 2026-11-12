@@ -1,0 +1,15 @@
+{
+  "name": "cqa-studio",
+  "private": true,
+  "version": "0.1.0",
+  "description": "CQA Studio — vanilla HTML/CSS/JS frontend for Freedom Broker conversation quality analytics",
+  "scripts": {
+    "dev": "bash scripts/dev-web.sh",
+    "dev:web": "bash scripts/dev-web.sh",
+    "dev:api": "bash scripts/dev-api.sh",
+    "bootstrap": "bash scripts/setup.sh",
+    "gen:api": "bash scripts/gen-api-types.sh",
+    "samples": "apps/api/.venv/bin/python scripts/generate_samples.py",
+    "test:api": "cd apps/api && .venv/bin/python -m pytest -q"
+  }
+}
